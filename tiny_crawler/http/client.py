@@ -1,7 +1,10 @@
 ﻿"""Async HTTP client with proxy rotation, retries, and UA rotation."""
 import asyncio
+import codecs
+from html import unescape
 import logging
 import random
+import re
 from typing import Mapping, Optional, Dict, Any, Tuple
 
 import aiohttp
@@ -14,6 +17,11 @@ from tiny_crawler.utils.backoff import sleep_backoff
 from tiny_crawler.http.socks_session import create_socks_session
 
 logger = logging.getLogger(__name__)
+
+try:
+    from charset_normalizer import from_bytes as detect_charset_from_bytes
+except Exception:  # pragma: no cover
+    detect_charset_from_bytes = None
 
 try:
     from aiohttp_socks import ProxyError as AiohttpSocksProxyError
@@ -36,6 +44,118 @@ try:
     )
 except Exception:
     SOCKS_EXCEPTIONS = ()
+
+
+META_CHARSET_RE = re.compile(br"<meta[^>]+charset=[\"']?\s*([a-zA-Z0-9._:-]+)", re.IGNORECASE)
+META_HTTP_EQUIV_RE = re.compile(
+    br"<meta[^>]+http-equiv=[\"']?content-type[\"']?[^>]*content=[\"'][^\"']*charset=([a-zA-Z0-9._:-]+)",
+    re.IGNORECASE,
+)
+HTML_ENTITY_RE = re.compile(r"&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]+);")
+PRESERVED_HTML_ENTITIES = {"lt", "gt", "quot", "apos", "#34", "#39", "#60", "#62"}
+
+
+def _extract_meta_charset(content: bytes) -> Optional[str]:
+    """Read charset from meta tags in the first bytes of the document."""
+    head = content[:8192]
+    for pattern in (META_CHARSET_RE, META_HTTP_EQUIV_RE):
+        match = pattern.search(head)
+        if match:
+            try:
+                charset = match.group(1).decode("ascii", errors="ignore")
+                return charset.strip().strip("\"'").lower()
+            except Exception:
+                continue
+    return None
+
+
+def _detect_bom_encoding(content: bytes) -> Optional[str]:
+    """Detect BOM-based encodings."""
+    if content.startswith(codecs.BOM_UTF8):
+        return "utf-8-sig"
+    if content.startswith(codecs.BOM_UTF16_LE):
+        return "utf-16-le"
+    if content.startswith(codecs.BOM_UTF16_BE):
+        return "utf-16-be"
+    if content.startswith(codecs.BOM_UTF32_LE):
+        return "utf-32-le"
+    if content.startswith(codecs.BOM_UTF32_BE):
+        return "utf-32-be"
+    return None
+
+
+def _unescape_entities_preserving_markup(text: str) -> str:
+    """Decode HTML entities while keeping entities that can alter tag structure."""
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(1).lower()
+        if token in PRESERVED_HTML_ENTITIES:
+            return match.group(0)
+        return unescape(match.group(0))
+
+    # Run twice to support nested encodings like "&amp;#273;" -> "đ".
+    for _ in range(2):
+        updated = HTML_ENTITY_RE.sub(_replace, text)
+        if updated == text:
+            break
+        text = updated
+    return text
+
+
+def decode_html_content(content: bytes, response_charset: Optional[str] = None) -> str:
+    """
+    Decode response bytes to text using declared/detected charset.
+    Returns unicode text normalized through UTF-8 and HTML-unescaped.
+    """
+    candidates: list[str] = []
+
+    if response_charset:
+        candidates.append(str(response_charset).strip().strip("\"'").lower())
+
+    bom_encoding = _detect_bom_encoding(content)
+    if bom_encoding:
+        candidates.append(bom_encoding)
+
+    meta_charset = _extract_meta_charset(content)
+    if meta_charset:
+        candidates.append(meta_charset)
+
+    if detect_charset_from_bytes is not None:
+        try:
+            best = detect_charset_from_bytes(content).best()
+            if best and best.encoding:
+                candidates.append(best.encoding.lower())
+        except Exception:
+            pass
+
+    # Common fallbacks. Keep utf-8 first as the most common default.
+    candidates.extend(["utf-8", "windows-1252", "iso-8859-1"])
+
+    decoded: Optional[str] = None
+    tried: set[str] = set()
+    for encoding in candidates:
+        normalized = str(encoding).strip().strip("\"'").lower()
+        if not normalized or normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            decoded = content.decode(normalized)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    if decoded is None:
+        decoded = content.decode("utf-8", errors="replace")
+
+    # Keep a valid UTF-8 representable string for parser input.
+    decoded = decoded.encode("utf-8", errors="replace").decode("utf-8")
+
+    # Decode HTML character references without mutating escaped markup.
+    if "&" in decoded:
+        decoded = _unescape_entities_preserving_markup(decoded)
+
+    return decoded
+
 
 def build_headers(
     headers: Optional[Mapping[str, str]] = None,
@@ -120,7 +240,7 @@ class HttpClient:
 
     async def fetch(self, url: str, method: str = "GET", **kwargs: Any) -> str:
         """
-        Fetch a URL and return UTF-8 decoded HTML/string.
+        Fetch a URL and return decoded HTML/text normalized for parser input.
         Retries with exponential backoff on failure.
         Proxy errors do not count toward retry.
         """
@@ -170,6 +290,7 @@ class HttpClient:
         allow_http_error = bool(kwargs.pop("allow_http_error", False))
         proxy_lease: Optional[ProxyLease] = None
         proxy_url: Optional[str] = None
+        response_charset: Optional[str] = None
 
         if use_proxy and self.proxy_manager and self.proxy_manager.has_proxies:
             proxy_lease = await self.proxy_manager.acquire_proxy()
@@ -181,6 +302,7 @@ class HttpClient:
                 async with proxy_lease:
                     async with session.request(method, url, headers=headers, **kwargs) as resp:
                         content = await resp.read()
+                        response_charset = resp.charset
                         if not allow_http_error:
                             resp.raise_for_status()
             else:
@@ -188,6 +310,7 @@ class HttpClient:
                 async with proxy_lease if proxy_lease else _null_async_context():
                     async with session.request(method, url, proxy=proxy_url, headers=headers, **kwargs) as resp:
                         content = await resp.read()
+                        response_charset = resp.charset
                         if not allow_http_error:
                             resp.raise_for_status()
         except Exception as exc:
@@ -199,16 +322,22 @@ class HttpClient:
                 await self.proxy_manager.mark_bad(proxy_lease.proxy)
             raise
 
-        return content.decode("utf-8", errors="ignore")
+        return decode_html_content(content, response_charset=response_charset)
 
     async def close(self) -> None:
         """Close all sessions."""
+        closed_any = False
         if self._default_session and not self._default_session.closed:
             await self._default_session.close()
+            closed_any = True
         for session in self._socks_sessions.values():
             if not session.closed:
                 await session.close()
+                closed_any = True
         self._socks_sessions.clear()
+        # Allow SSL transports to finish closing before loop shutdown.
+        if closed_any:
+            await asyncio.sleep(0.25)
 
 
 class _null_async_context:

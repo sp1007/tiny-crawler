@@ -1,6 +1,6 @@
 ﻿"""Pipeline entities: step, result, task context."""
 from dataclasses import dataclass, field
-from typing import Any, List, Dict, Callable, Optional, Awaitable
+from typing import Any, List, Dict, Callable, Optional, Awaitable, Union
 
 from tiny_crawler.parser.base import BaseParser
 
@@ -30,7 +30,7 @@ class PipelineStep:
         self,
         name: str,
         parser: BaseParser,
-        fetcher: Optional[Callable[[str], Awaitable[str]]] = None,
+        fetcher: Optional[Callable[[str], Awaitable[Union[str, bytes]]]] = None,
         method: str = "GET",
         headers: Optional[Dict[str, str]] = None,
     ) -> None:

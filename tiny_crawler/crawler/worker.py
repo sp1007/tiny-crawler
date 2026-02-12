@@ -2,11 +2,11 @@
 import asyncio
 import logging
 import threading
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from tiny_crawler.crawler.pipeline import PipelineStep, TaskContext, ParserResult
 from tiny_crawler.crawler.tracker import TaskTracker
-from tiny_crawler.http.client import HttpClient
+from tiny_crawler.http.client import HttpClient, decode_html_content
 from tiny_crawler.storage.base import StorageTarget
 
 logger = logging.getLogger(__name__)
@@ -146,11 +146,19 @@ class Worker:
                     self.step_progress_cb()
             self.tracker.decrement(1)
 
+    @staticmethod
+    def _normalize_html_for_parser(payload: Union[str, bytes]) -> str:
+        """Normalize custom fetcher payloads before handing to parser."""
+        if isinstance(payload, bytes):
+            return decode_html_content(payload)
+        return decode_html_content(payload.encode("utf-8", errors="replace"), response_charset="utf-8")
+
     async def fetch(self, step: PipelineStep, url: str, method: str = "GET", request_kwargs: Optional[dict] = None) -> str:
         """Use step-specific fetcher or default HTTP client."""
         request_kwargs = request_kwargs or {}
         if step.fetcher:
-            return await step.fetcher(url)
+            payload = await step.fetcher(url)
+            return self._normalize_html_for_parser(payload)
         return await self.http.fetch(url, method=method, **request_kwargs)
 
     def submit(self, ctx: TaskContext) -> None:
