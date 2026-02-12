@@ -1,0 +1,6 @@
+﻿aiohttp>=3.9
+aiohttp-socks>=0.8
+tqdm>=4.66
+requests>=2.31
+pymongo>=4.6
+beautifulsoup4>=4.12
