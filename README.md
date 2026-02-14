@@ -32,6 +32,7 @@ Run examples:
 ```bash
 python -m tiny_crawler.examples.multi_step_proxy   # auto fetch + check proxies, JSONL output
 python -m tiny_crawler.examples.multi_step_mongo   # uses proxies if available, JSONL + Mongo (needs MONGO_URI)
+python -m tiny_crawler.examples.multi_step_download # 3-step URL -> TXT URL -> download via proxy if available
 python -m tiny_crawler.examples.single_url         # simple title extractor
 ```
 
