@@ -54,12 +54,12 @@ class CrawlerEngine:
         self._pbar_lock = threading.RLock()
 
     def _progress_tick(self) -> None:
-        if self._pbar:
+        if self._pbar is not None:
             with self._pbar_lock:
                 self._pbar.update(1)
 
     def _progress_add_total(self, n: int) -> None:
-        if self._pbar:
+        if self._pbar is not None:
             with self._pbar_lock:
                 self._pbar.total = (self._pbar.total or 0) + n
                 self._pbar.refresh()
@@ -136,7 +136,7 @@ class CrawlerEngine:
             if self._executor:
                 self._executor.shutdown(wait=True, cancel_futures=True)
 
-            if self._pbar:
+            if self._pbar is not None:
                 self._pbar.close()
             for pbar in self._step_pbars:
                 pbar.close()
