@@ -6,10 +6,19 @@ from tiny_crawler.parser.base import BaseParser
 
 
 @dataclass
+class NextTask:
+    """A next-step task with per-url metadata."""
+    url: str
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ParserResult:
     """Result returned by parser."""
     data: Any = None
     next_urls: List[str] = field(default_factory=list)
+    # Use next_tasks when each emitted URL needs its own metadata.
+    next_tasks: List[NextTask] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
 
 

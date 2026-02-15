@@ -2,9 +2,9 @@
 import asyncio
 import logging
 import threading
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from tiny_crawler.crawler.pipeline import PipelineStep, TaskContext, ParserResult
+from tiny_crawler.crawler.pipeline import PipelineStep, TaskContext, ParserResult, NextTask
 from tiny_crawler.crawler.tracker import TaskTracker
 from tiny_crawler.http.client import HttpClient, decode_html_content
 from tiny_crawler.storage.base import StorageTarget
@@ -116,18 +116,21 @@ class Worker:
 
             # Enqueue next-step URLs
             next_index = task.step_index + 1
-            if parser_result.next_urls and next_index < len(self.steps):
+            next_tasks = self._collect_next_tasks(parser_result)
+            if next_tasks and next_index < len(self.steps):
                 assert self.queue is not None
                 if self.step_total_cb:
-                    self.step_total_cb(next_index, len(parser_result.next_urls))
-                self.tracker.increment(len(parser_result.next_urls))
-                for url in parser_result.next_urls:
+                    self.step_total_cb(next_index, len(next_tasks))
+                self.tracker.increment(len(next_tasks))
+                for url, next_meta in next_tasks:
+                    merged_meta = dict(task.meta)
+                    merged_meta.update(next_meta)
                     await self.queue.put(
                         TaskContext(
                             url=url,
                             step_index=next_index,
                             root_id=task.root_id,
-                            meta=dict(task.meta),
+                            meta=merged_meta,
                             parent_url=task.url,
                         )
                     )
@@ -152,6 +155,35 @@ class Worker:
         if isinstance(payload, bytes):
             return decode_html_content(payload)
         return decode_html_content(payload.encode("utf-8", errors="replace"), response_charset="utf-8")
+
+    @staticmethod
+    def _collect_next_tasks(parser_result: ParserResult) -> List[Tuple[str, Dict[str, Any]]]:
+        """Normalize legacy next_urls and new next_tasks into one list."""
+        merged: List[Tuple[str, Dict[str, Any]]] = []
+
+        for next_url in parser_result.next_urls:
+            if not isinstance(next_url, str) or not next_url:
+                logger.warning("Skip invalid next URL: %r", next_url)
+                continue
+            merged.append((next_url, {}))
+
+        for item in parser_result.next_tasks:
+            if not isinstance(item, NextTask):
+                logger.warning("Skip invalid next task: %r", item)
+                continue
+            if not isinstance(item.url, str) or not item.url:
+                logger.warning("Skip next task with invalid URL: %r", item.url)
+                continue
+            if item.meta is None:
+                task_meta: Dict[str, Any] = {}
+            elif isinstance(item.meta, dict):
+                task_meta = item.meta
+            else:
+                logger.warning("Skip next task with invalid meta for URL %s", item.url)
+                continue
+            merged.append((item.url, task_meta))
+
+        return merged
 
     async def fetch(self, step: PipelineStep, url: str, method: str = "GET", request_kwargs: Optional[dict] = None) -> str:
         """Use step-specific fetcher or default HTTP client."""

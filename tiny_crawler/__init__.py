@@ -3,7 +3,7 @@ Tiny Crawler package entry point.
 Provides convenient imports for public API.
 """
 from .crawler.engine import CrawlerEngine
-from .crawler.pipeline import PipelineStep, ParserResult, TaskContext
+from .crawler.pipeline import PipelineStep, ParserResult, TaskContext, NextTask
 from .parser.base import BaseParser
 from .proxy.manager import ProxyManager
 from .proxy.fetcher import fetch_free_proxies
@@ -18,6 +18,7 @@ __all__ = [
     "CrawlerEngine",
     "PipelineStep",
     "ParserResult",
+    "NextTask",
     "TaskContext",
     "BaseParser",
     "ProxyManager",
