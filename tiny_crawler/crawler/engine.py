@@ -25,6 +25,7 @@ class CrawlerEngine:
       http_timeout: total timeout (seconds) for each HTTP request.
       http_retries: number of retries for non-proxy errors per request.
       per_worker_concurrency: async tasks per worker event loop.
+      prioritize_next_step: if True, next-step tasks are pushed to a high-priority queue.
       show_step_progress: if True, show tqdm per pipeline step.
     """
 
@@ -37,6 +38,7 @@ class CrawlerEngine:
         http_timeout: float = 15.0,
         http_retries: int = 3,
         per_worker_concurrency: int = 32,
+        prioritize_next_step: bool = False,
         show_step_progress: bool = False,
     ) -> None:
         self.steps = steps
@@ -46,6 +48,7 @@ class CrawlerEngine:
         self.http_timeout = http_timeout
         self.http_retries = http_retries
         self.per_worker_concurrency = per_worker_concurrency
+        self.prioritize_next_step = prioritize_next_step
         self.show_step_progress = show_step_progress
         self._workers: List[Worker] = []
         self._executor: Optional[ThreadPoolExecutor] = None
@@ -102,6 +105,7 @@ class CrawlerEngine:
                 http_timeout=self.http_timeout,
                 http_retries=self.http_retries,
                 per_worker_concurrency=self.per_worker_concurrency,
+                prioritize_next_step=self.prioritize_next_step,
                 progress_cb=self._progress_tick,
                 step_progress_cb=self._step_progress_tick if self.show_step_progress else None,
                 step_total_cb=self._step_add_total if self.show_step_progress else None,

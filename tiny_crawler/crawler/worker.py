@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from tiny_crawler.crawler.pipeline import PipelineStep, TaskContext, ParserResult, NextTask
 from tiny_crawler.crawler.tracker import TaskTracker
@@ -25,6 +25,7 @@ class Worker:
         http_timeout: float = 15.0,
         http_retries: int = 3,
         per_worker_concurrency: int = 32,
+        prioritize_next_step: bool = False,
         progress_cb=None,
         step_progress_cb=None,
         step_total_cb=None,
@@ -37,11 +38,13 @@ class Worker:
         self.http_timeout = http_timeout
         self.http_retries = http_retries
         self.per_worker_concurrency = per_worker_concurrency
+        self.prioritize_next_step = prioritize_next_step
         self.progress_cb = progress_cb
         self.step_progress_cb = step_progress_cb
         self.step_total_cb = step_total_cb
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.queue: Optional[asyncio.Queue] = None
+        self.priority_queue: Optional[asyncio.Queue] = None
         self._ready = threading.Event()
         self._shutdown_event: Optional[asyncio.Event] = None
         self._runner_tasks: List[asyncio.Task] = []
@@ -52,6 +55,7 @@ class Worker:
         self.loop.set_exception_handler(self._handle_loop_exception)
         asyncio.set_event_loop(self.loop)
         self.queue = asyncio.Queue()
+        self.priority_queue = asyncio.Queue() if self.prioritize_next_step else None
         self._shutdown_event = asyncio.Event()
         self._ready.set()
         try:
@@ -79,14 +83,14 @@ class Worker:
         await self.http.close()
 
     async def _runner(self) -> None:
-        assert self.queue is not None
         while True:
+            source: Literal["normal", "priority"] = "normal"
             try:
-                task = await self.queue.get()
+                task, source = await self._get_task()
             except asyncio.CancelledError:
                 break
             if task is None:
-                self.queue.task_done()
+                self._task_done(source)
                 break
             try:
                 await self.process_task(task)
@@ -95,7 +99,24 @@ class Worker:
             except Exception as exc:
                 logger.exception("Worker %s task error: %s", self.worker_id, exc)
             finally:
-                self.queue.task_done()
+                self._task_done(source)
+
+    async def _get_task(self) -> Tuple[Optional[TaskContext], Literal["normal", "priority"]]:
+        assert self.queue is not None
+        if self.prioritize_next_step and self.priority_queue is not None:
+            try:
+                return self.priority_queue.get_nowait(), "priority"
+            except asyncio.QueueEmpty:
+                pass
+        return await self.queue.get(), "normal"
+
+    def _task_done(self, source: Literal["normal", "priority"]) -> None:
+        if source == "priority":
+            if self.priority_queue is not None:
+                self.priority_queue.task_done()
+            return
+        if self.queue is not None:
+            self.queue.task_done()
 
     async def process_task(self, task: TaskContext) -> None:
         try:
@@ -118,22 +139,24 @@ class Worker:
             next_index = task.step_index + 1
             next_tasks = self._collect_next_tasks(parser_result)
             if next_tasks and next_index < len(self.steps):
-                assert self.queue is not None
                 if self.step_total_cb:
                     self.step_total_cb(next_index, len(next_tasks))
                 self.tracker.increment(len(next_tasks))
                 for url, next_meta in next_tasks:
                     merged_meta = dict(task.meta)
                     merged_meta.update(next_meta)
-                    await self.queue.put(
-                        TaskContext(
-                            url=url,
-                            step_index=next_index,
-                            root_id=task.root_id,
-                            meta=merged_meta,
-                            parent_url=task.url,
-                        )
+                    next_ctx = TaskContext(
+                        url=url,
+                        step_index=next_index,
+                        root_id=task.root_id,
+                        meta=merged_meta,
+                        parent_url=task.url,
                     )
+                    if self.prioritize_next_step and self.priority_queue is not None:
+                        await self.priority_queue.put(next_ctx)
+                    else:
+                        assert self.queue is not None
+                        await self.queue.put(next_ctx)
 
             # Persist data if present
             if parser_result.data is not None:

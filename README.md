@@ -33,6 +33,7 @@ Run examples:
 python -m tiny_crawler.examples.multi_step_proxy   # auto fetch + check proxies, JSONL output
 python -m tiny_crawler.examples.multi_step_mongo   # uses proxies if available, JSONL + Mongo (needs MONGO_URI)
 python -m tiny_crawler.examples.multi_step_download # 3-step URL -> TXT URL -> save as data/site/category/file.txt
+python -m tiny_crawler.examples.site_8080txt_download # 8080txt.com: step1 -> step2 -> txt, save data/site_8080txtcom/category/id_title.txt
 python -m tiny_crawler.examples.single_url         # simple title extractor
 ```
 
@@ -48,6 +49,7 @@ engine = CrawlerEngine(
     workers=8,
     storage_targets=[JSONLStorage("output/data.jsonl")],
     proxy_manager=proxy_manager,          # optional
+    prioritize_next_step=True,            # optional: prefer immediate next-step processing
     show_step_progress=True,              # per-step progress bars
 )
 engine.run(start_urls)
