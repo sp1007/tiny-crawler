@@ -16,10 +16,15 @@ class NextTask:
 class ParserResult:
     """Result returned by parser."""
     data: Any = None
+    # Enqueue into next pipeline step (legacy behavior).
     next_urls: List[str] = field(default_factory=list)
     # Use next_tasks when each emitted URL needs its own metadata.
     next_tasks: List[NextTask] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
+    # Enqueue into current step (for in-step URL discovery/crawling).
+    same_step_urls: List[str] = field(default_factory=list)
+    # Use same_step_tasks when current-step URLs need per-url metadata.
+    same_step_tasks: List[NextTask] = field(default_factory=list)
 
 
 @dataclass

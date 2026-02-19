@@ -135,9 +135,36 @@ class Worker:
             parser_result: ParserResult = await step.parser.parse(html, task)
             task.meta.update(parser_result.meta)
 
+            # Enqueue same-step URLs (discover new URLs while staying in current step).
+            same_step_tasks = self._collect_tasks(
+                parser_result.same_step_urls,
+                parser_result.same_step_tasks,
+                label="same-step",
+            )
+            if same_step_tasks:
+                if self.step_total_cb:
+                    self.step_total_cb(task.step_index, len(same_step_tasks))
+                self.tracker.increment(len(same_step_tasks))
+                for url, same_meta in same_step_tasks:
+                    merged_meta = dict(task.meta)
+                    merged_meta.update(same_meta)
+                    same_ctx = TaskContext(
+                        url=url,
+                        step_index=task.step_index,
+                        root_id=task.root_id,
+                        meta=merged_meta,
+                        parent_url=task.url,
+                    )
+                    assert self.queue is not None
+                    await self.queue.put(same_ctx)
+
             # Enqueue next-step URLs
             next_index = task.step_index + 1
-            next_tasks = self._collect_next_tasks(parser_result)
+            next_tasks = self._collect_tasks(
+                parser_result.next_urls,
+                parser_result.next_tasks,
+                label="next-step",
+            )
             if next_tasks and next_index < len(self.steps):
                 if self.step_total_cb:
                     self.step_total_cb(next_index, len(next_tasks))
@@ -180,29 +207,34 @@ class Worker:
         return decode_html_content(payload.encode("utf-8", errors="replace"), response_charset="utf-8")
 
     @staticmethod
-    def _collect_next_tasks(parser_result: ParserResult) -> List[Tuple[str, Dict[str, Any]]]:
-        """Normalize legacy next_urls and new next_tasks into one list."""
+    def _collect_tasks(
+        urls: List[str],
+        tasks: List[NextTask],
+        *,
+        label: str,
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """Normalize URL/task outputs into one list."""
         merged: List[Tuple[str, Dict[str, Any]]] = []
 
-        for next_url in parser_result.next_urls:
-            if not isinstance(next_url, str) or not next_url:
-                logger.warning("Skip invalid next URL: %r", next_url)
+        for url in urls:
+            if not isinstance(url, str) or not url:
+                logger.warning("Skip invalid %s URL: %r", label, url)
                 continue
-            merged.append((next_url, {}))
+            merged.append((url, {}))
 
-        for item in parser_result.next_tasks:
+        for item in tasks:
             if not isinstance(item, NextTask):
-                logger.warning("Skip invalid next task: %r", item)
+                logger.warning("Skip invalid %s task: %r", label, item)
                 continue
             if not isinstance(item.url, str) or not item.url:
-                logger.warning("Skip next task with invalid URL: %r", item.url)
+                logger.warning("Skip %s task with invalid URL: %r", label, item.url)
                 continue
             if item.meta is None:
                 task_meta: Dict[str, Any] = {}
             elif isinstance(item.meta, dict):
                 task_meta = item.meta
             else:
-                logger.warning("Skip next task with invalid meta for URL %s", item.url)
+                logger.warning("Skip %s task with invalid meta for URL %s", label, item.url)
                 continue
             merged.append((item.url, task_meta))
 

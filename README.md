@@ -18,7 +18,7 @@ Async-first, multi-thread crawler framework with proxy rotation, per-step pipeli
 ## Key concepts
 - `PipelineStep`: defines parser, HTTP method, default headers for that step.
 - `TaskContext`: carries URL, step index, root_id, meta; meta flows to next steps.
-- `ParserResult`: parser returns `data`, `next_urls`/`next_tasks`, and `meta`.
+- `ParserResult`: parser returns `data`, `next_urls`/`next_tasks`, `same_step_urls`/`same_step_tasks`, and `meta`.
 - `ProxyManager`: enforces 1-connection-per-proxy with per-thread + per-loop semaphores.
 - `HttpClient`: retries non-proxy errors; proxy errors are suppressed/rotated; supports `json` or `form` payloads.
 
@@ -33,7 +33,7 @@ Run examples:
 python -m tiny_crawler.examples.multi_step_proxy   # auto fetch + check proxies, JSONL output
 python -m tiny_crawler.examples.multi_step_mongo   # uses proxies if available, JSONL + Mongo (needs MONGO_URI)
 python -m tiny_crawler.examples.multi_step_download # 3-step URL -> TXT URL -> save as data/site/category/file.txt
-python -m tiny_crawler.examples.site_8080txt_download # 8080txt.com: step1 -> step2 -> txt, save data/site_8080txtcom/category/id_title.txt
+python -m tiny_crawler.examples.site_8080txt_download # 8080txt.com: step1 -> step2 -> txt; add --crawl-all-pages for same-step URL discovery
 python -m tiny_crawler.examples.single_url         # simple title extractor
 ```
 
@@ -89,6 +89,14 @@ return ParserResult(
         "category": context.meta.get("category"),
         "content": content_text,
     }
+)
+```
+
+### Discovering URLs in the same step
+Use `same_step_urls` / `same_step_tasks` to push discovered URLs back to the current step queue:
+```python
+return ParserResult(
+    same_step_urls=[another_list_page_url],
 )
 ```
 
